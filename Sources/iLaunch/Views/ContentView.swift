@@ -16,6 +16,10 @@ struct ContentView: View {
 
     private var animEnabled: Bool { !preferences.reduceMotion }
 
+    private var shouldBlurBackground: Bool {
+        viewModel.openFolder != nil && !viewModel.isFolderClosing
+    }
+
     /// Folder open/close spring — used with `withAnimation` so removal transitions run
     /// even when dismiss comes from AppKit (which does not wrap the assignment).
     private var folderAnimation: Animation? {
@@ -60,6 +64,12 @@ struct ContentView: View {
                         .allowsHitTesting(false)
 
                     contentBody
+                        .blur(radius: shouldBlurBackground ? 16 : 0)
+                        .opacity(shouldBlurBackground ? 0.45 : 1)
+                        .animation(
+                            (animEnabled && preferences.animateFolder) ? .easeOut(duration: 0.16) : nil,
+                            value: shouldBlurBackground
+                        )
                         .frame(
                             width: geo.size.width,
                             height: max(0, geo.size.height - searchChromeHeight - dockReservedHeight)

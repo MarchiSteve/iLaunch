@@ -22,7 +22,7 @@ struct OverlayState {
 }
 
 /// Borderless window that can become key so the search field and Esc work.
-final class OverlayWindow: NSWindow {
+final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -71,6 +71,7 @@ final class OverlayWindowController {
     /// we can get out of the way without stealing focus back.
     private var resignActiveObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
+    private var activeSpaceObserver: NSObjectProtocol?
 
     var exposedViewModel: LaunchpadViewModel { viewModel }
 
@@ -132,6 +133,17 @@ final class OverlayWindowController {
                 self?.viewModel.applyGridSettingsChange()
             }
         }
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isVisible == true else { return }
+                // Keep focus on the destination desktop when dismissing after a Space switch.
+                self.hide(reactivatePrevious: false)
+            }
+        }
         screenParametersObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
@@ -181,12 +193,14 @@ final class OverlayWindowController {
 
         let window = OverlayWindow(
             contentRect: frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+        window.hidesOnDeactivate = false
+        window.becomesKeyOnlyIfNeeded = false
         window.level = OverlayPresentation.windowLevel(coverDock: coverDock)
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .canJoinAllApplications, .ignoresCycle]
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -251,9 +265,7 @@ final class OverlayWindowController {
         installClickMonitor(window: window)
         installKeyMonitor(window: window)
 
-        // Hotkey path: Carbon delivers the toggle while another app is frontmost.
-        // Must unhide + activate + makeKey or local key monitors never fire and
-        // typing never reaches the search field.
+        // The panel takes keyboard focus while the current full-screen Space stays active.
         activateForKeyboard(window)
 
         // Must be set AFTER activation — presentationOptions apply to the
@@ -290,21 +302,13 @@ final class OverlayWindowController {
         }
     }
 
-    /// Bring the overlay (and the app) to the front so keyboard events work.
-    /// Dock clicks do this implicitly; Carbon hotkeys fire while another app is
-    /// frontmost, so we re-assert activation + key status (without mutating
-    /// collectionBehavior — incompatible flags crash in _validateCollectionBehavior).
+    /// Give the panel keyboard focus without activating the app and switching Spaces.
     private func activateForKeyboard(_ window: NSWindow) {
         // Prefer not to rely on unhide — we no longer NSApp.hide on dismiss.
         if NSApp.isHidden {
             NSApp.unhide(nil)
         }
-        NSApp.setActivationPolicy(.regular)
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        // A nonactivating panel takes keyboard focus without leaving another app's full-screen Space.
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         // Prefer the SwiftUI host as first responder so the first click is not
@@ -319,11 +323,6 @@ final class OverlayWindowController {
         // Carbon hotkey can bounce focus back; re-assert once on next turn.
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window, self.window === window, window.isVisible else { return }
-            if #available(macOS 14.0, *) {
-                NSApp.activate()
-            } else {
-                NSApp.activate(ignoringOtherApps: true)
-            }
             window.makeKeyAndOrderFront(nil)
             if !(window.firstResponder is NSTextField || window.firstResponder is NSTextView) {
                 if let hosting = self.hostingView {
@@ -332,13 +331,7 @@ final class OverlayWindowController {
                     window.makeFirstResponder(window.contentView)
                 }
             }
-            // Diagnostic for reports of an overlay that renders but takes no
-            // input (unresponsive to click/Esc/scroll) right after macOS
-            // relaunches the app for a permission change: if isActive/isKey
-            // come back false here, the window is only *visually* frontmost
-            // (high window level) while keyboard/mouse events are still being
-            // routed to whatever app the system considers actually active —
-            // NSApp.activate() can silently no-op in that relaunch context.
+            // A nonactivating panel may be key while its application is inactive.
             DiagLog.write(
                 "activate: isActive=\(NSApp.isActive) isKey=\(window.isKeyWindow) policy=\(NSApp.activationPolicy().rawValue) firstResponder=\(String(describing: type(of: window.firstResponder)))"
             )

@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var hotKeyManager: GlobalHotKeyManager?
     private var updateService: UpdateService?
+    private var trackpadPinch: TrackpadPinchService?
+    private var desktopShownByGesture = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Two iLaunch.app copies (e.g. /Applications and a locally built
@@ -45,6 +47,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         hotKeyManager?.start(keyCode: prefs.hotKeyCode, modifiers: prefs.hotKeyModifiers)
+        trackpadPinch = TrackpadPinchService { [weak self, overlay] direction in
+            guard let self else { return }
+            switch direction {
+            case .inward:
+                if self.desktopShownByGesture && !overlay.isVisible {
+                    if SystemDesktopAction.toggle() { self.desktopShownByGesture = false }
+                } else {
+                    self.desktopShownByGesture = false
+                    overlay.show()
+                }
+            case .outward:
+                if overlay.isVisible {
+                    self.desktopShownByGesture = false
+                    overlay.hide()
+                } else if SystemDesktopAction.toggle() {
+                    self.desktopShownByGesture.toggle()
+                }
+            }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.desktopShownByGesture = false }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if let bundleID = app?.bundleIdentifier,
+               bundleID != "com.apple.finder", bundleID != Bundle.main.bundleIdentifier {
+                MainActor.assumeIsolated { self?.desktopShownByGesture = false }
+            }
+        }
+        trackpadPinch?.start()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.trackpadPinch?.stop()
+                self?.trackpadPinch?.start()
+            }
+        }
+
         menuBarController = MenuBarController(overlay: overlay, hotKeyManager: hotKeyManager, updateService: updateService)
         // Must run BEFORE overlay.show(), not after: the overlay window sits
         // at a level above the Dock (or above the menu bar in cover-Dock
@@ -65,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlay.show()
             }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        trackpadPinch?.stop()
     }
 
     /// Dock icon click: always open fullscreen launchpad.

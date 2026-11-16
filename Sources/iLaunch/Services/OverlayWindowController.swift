@@ -74,6 +74,7 @@ final class OverlayWindowController {
     private var activeSpaceObserver: NSObjectProtocol?
 
     var exposedViewModel: LaunchpadViewModel { viewModel }
+    var isVisible: Bool { window?.isVisible == true }
 
     init() {
         dismissObserver = NotificationCenter.default.addObserver(

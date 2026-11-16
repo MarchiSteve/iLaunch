@@ -6,6 +6,7 @@ struct ContentView: View {
     @Bindable var viewModel: LaunchpadViewModel
     let preferences: UserPreferences
 
+    @State private var hasAppeared = false
     @State private var backgroundIndex = 0
     @State private var cachedUploadedImage: NSImage?
     @State private var cachedUploadedPath: String?
@@ -166,6 +167,13 @@ struct ContentView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .scaleEffect(hasAppeared ? 1 : 0.96)
+        .opacity(hasAppeared ? 1 : 0)
+        .onAppear {
+            withAnimation((animEnabled && preferences.animateIcons) ? .easeOut(duration: 0.2) : nil) {
+                hasAppeared = true
+            }
         }
         .coordinateSpace(name: "overlay")
         .onPreferenceChange(TileFramePreferenceKey.self) { frames in

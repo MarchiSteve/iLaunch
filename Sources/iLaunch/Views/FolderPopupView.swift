@@ -121,6 +121,11 @@ struct FolderPopupView: View {
         return 0.18 * (4 * p * (1 - p))
     }
 
+    private var sourceScale: CGFloat {
+        max(0.12, min(sourceFrame.width / panelWidth,
+                      sourceFrame.height / max(120, estimatedPanelHeight)))
+    }
+
     /// Scale + offset: tile frame → screen center.
     private var zoomTransform: (scale: CGFloat, offset: CGSize) {
         let hasSource = sourceFrame.width > 2 && sourceFrame.height > 2
@@ -130,12 +135,7 @@ struct FolderPopupView: View {
             return (s, .zero)
         }
 
-        let panelW = panelWidth
-        let panelH = max(120, estimatedPanelHeight)
-        let startScale = max(
-            0.12,
-            min(sourceFrame.width / panelW, sourceFrame.height / panelH)
-        )
+        let startScale = sourceScale
         let scale = startScale + (1 - startScale) * progress
         let finalCenter = CGPoint(x: overlaySize.width / 2, y: overlaySize.height / 2)
         let sourceCenter = CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)
@@ -169,7 +169,7 @@ struct FolderPopupView: View {
             ZStack {
                 // Always-light 3×3 chrome near the tile (no heavy member grid).
                 compactTileLayer
-                    .opacity(Double(1 - reveal))
+                    .modifier(FolderPreviewVisibility(progress: progress))
                     .allowsHitTesting(false)
 
                 // Mount the expensive 5-col panel only once reveal starts —
@@ -234,12 +234,13 @@ struct FolderPopupView: View {
     /// stretched 2×2 panel). Mid-zoom shells read as normal folder tiles.
     private var compactTileLayer: some View {
         let panelH = max(120, estimatedPanelHeight)
-        // Prefer the grid tile's own size so open/close match the real icon.
+        // Compensate for the outer zoom so the closed preview matches the source icon exactly.
         let fromSource = min(sourceFrame.width, sourceFrame.height)
-        let side = max(72, min(fromSource > 2 ? fromSource * 0.92 : 110, min(panelWidth, panelH) * 0.42))
+        let side = fromSource > 2 ? fromSource / sourceScale : 110
         return ZStack {
             Color.clear
             FolderTileView(members: item.members, size: side)
+                .frame(width: side, height: side)
         }
         .frame(width: panelWidth, height: panelH)
     }
@@ -582,5 +583,21 @@ struct SeededGenerator: RandomNumberGenerator {
         state ^= state >> 7
         state ^= state << 17
         return state
+    }
+}
+
+/// Derive visibility from the displayed zoom progress so a growing preview
+/// cannot remain visible behind the expanded member grid.
+nonisolated private struct FolderPreviewVisibility: AnimatableModifier {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let visibility = 1 - min(1, max(0, progress / 0.22))
+        content.opacity(Double(visibility))
     }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 
 extension Notification.Name {
     static let iLaunchDismiss = Notification.Name("iLaunchDismiss")
+    static let iLaunchOpenApplication = Notification.Name("iLaunchOpenApplication")
     static let iLaunchPageScroll = Notification.Name("iLaunchPageScroll")
     static let iLaunchFocusSearch = Notification.Name("iLaunchFocusSearch")
     /// Posted when edit mode is cancelled from AppKit (click monitor).
@@ -45,6 +46,7 @@ final class OverlayWindowController {
     private var window: OverlayWindow?
     private var hostingView: FirstMouseHostingView<ContentView>?
     private var dismissObserver: NSObjectProtocol?
+    private var openApplicationObserver: NSObjectProtocol?
     private var floatingDragStartObserver: NSObjectProtocol?
     private var focusSearchObserver: NSObjectProtocol?
     private var scrollMonitor: Any?
@@ -85,6 +87,12 @@ final class OverlayWindowController {
             MainActor.assumeIsolated {
                 self?.hide()
             }
+        }
+        openApplicationObserver = NotificationCenter.default.addObserver(
+            forName: .iLaunchOpenApplication, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let record = note.object as? AppRecord else { return }
+            MainActor.assumeIsolated { self?.launchApplication(record) }
         }
         floatingDragStartObserver = NotificationCenter.default.addObserver(
             forName: .iLaunchStartFloatingDrag,
@@ -266,7 +274,9 @@ final class OverlayWindowController {
         installClickMonitor(window: window)
         installKeyMonitor(window: window)
 
-        // The panel takes keyboard focus while the current full-screen Space stays active.
+        // Hotkey path: Carbon delivers the toggle while another app is frontmost.
+        // Must unhide + activate + makeKey or local key monitors never fire and
+        // typing never reaches the search field.
         activateForKeyboard(window)
 
         // Must be set AFTER activation — presentationOptions apply to the
@@ -303,7 +313,10 @@ final class OverlayWindowController {
         }
     }
 
-    /// Give the panel keyboard focus without activating the app and switching Spaces.
+    /// Bring the overlay (and the app) to the front so keyboard events work.
+    /// Dock clicks do this implicitly; Carbon hotkeys fire while another app is
+    /// frontmost, so we re-assert activation + key status (without mutating
+    /// collectionBehavior — incompatible flags crash in _validateCollectionBehavior).
     private func activateForKeyboard(_ window: NSWindow) {
         // Prefer not to rely on unhide — we no longer NSApp.hide on dismiss.
         if NSApp.isHidden {
@@ -332,7 +345,13 @@ final class OverlayWindowController {
                     window.makeFirstResponder(window.contentView)
                 }
             }
-            // A nonactivating panel may be key while its application is inactive.
+            // Diagnostic for reports of an overlay that renders but takes no
+            // input (unresponsive to click/Esc/scroll) right after macOS
+            // relaunches the app for a permission change: if isActive/isKey
+            // come back false here, the window is only *visually* frontmost
+            // (high window level) while keyboard/mouse events are still being
+            // routed to whatever app the system considers actually active —
+            // NSApp.activate() can silently no-op in that relaunch context.
             DiagLog.write(
                 "activate: isActive=\(NSApp.isActive) isKey=\(window.isKeyWindow) policy=\(NSApp.activationPolicy().rawValue) firstResponder=\(String(describing: type(of: window.firstResponder)))"
             )
@@ -353,6 +372,12 @@ final class OverlayWindowController {
         removeKeyMonitor()
         removeFloatingDragMonitor()
         removeFloatingGhost()
+        if viewModel.editDragID != nil {
+            viewModel.endLiveReorder()
+            viewModel.clearFloatingDrag()
+            viewModel.gridDragItem = nil
+            viewModel.gridDragLocation = .zero
+        }
         searchChrome.remove()
         hostingView = nil
         window?.orderOut(nil)
@@ -574,7 +599,7 @@ final class OverlayWindowController {
         floatingEdgeArmed = false
 
         floatingDragMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDragged, .leftMouseUp]
+            matching: [.leftMouseDragged, .leftMouseUp, .mouseMoved]
         ) { [weak self] event in
             guard let self else { return event }
             return self.handleFloatingDrag(event, itemID: itemID)
@@ -583,7 +608,8 @@ final class OverlayWindowController {
 
     private func handleFloatingDrag(_ event: NSEvent, itemID: String) -> NSEvent? {
         guard let window else { return event }
-        let windowPoint = event.locationInWindow
+        let windowPoint = event.window === window
+            ? event.locationInWindow : window.mouseLocationOutsideOfEventStream
 
         if event.type == .leftMouseDragged {
             moveFloatingGhost(to: windowPoint)
@@ -597,7 +623,7 @@ final class OverlayWindowController {
             return nil
         }
 
-        if event.type == .leftMouseUp {
+        if event.type == .leftMouseUp || NSEvent.pressedMouseButtons & 1 == 0 {
             let point = swiftUIPoint(fromWindow: windowPoint, in: window)
             viewModel.resolveDrop(
                 sourceID: itemID,
@@ -608,7 +634,7 @@ final class OverlayWindowController {
             removeFloatingDragMonitor()
             NotificationCenter.default.post(name: .iLaunchEditDragEnded, object: nil)
             NotificationCenter.default.post(name: .iLaunchGridDragEnded, object: nil)
-            return nil
+            return event.type == .leftMouseUp ? nil : event
         }
         return event
     }
@@ -788,14 +814,16 @@ final class OverlayWindowController {
         }
     }
 
-    /// Return in the search field: launch the top result like a tap would
-    /// (instant dismiss first, launch on the next main turn).
     private func launchFirstSearchResult() {
         guard let record = viewModel.firstLaunchableSearchResult() else { return }
+        launchApplication(record)
+    }
+
+    private func launchApplication(_ record: AppRecord) {
         viewModel.finishClosingFolder()
-        hide()
+        hide(reactivatePrevious: false)
         DispatchQueue.main.async {
-            _ = AppLauncher().launch(record)
+            AppLauncher.openAsynchronously(record)
         }
     }
 

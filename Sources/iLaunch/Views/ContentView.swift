@@ -185,12 +185,6 @@ struct ContentView: View {
         .onPreferenceChange(TileActiveFramePreferenceKey.self) { frames in
             viewModel.tileActiveFrames = frames
         }
-        .animation(
-            (animEnabled && preferences.animateFolder)
-                ? .spring(response: 0.3, dampingFraction: 0.85)
-                : nil,
-            value: viewModel.openFolder?.id
-        )
         .onExitCommand {
             handleBlankTap()
         }
@@ -430,15 +424,8 @@ struct ContentView: View {
         scrollModel.update(isSearching: isSearching, isFolderOpen: viewModel.openFolder != nil)
     }
 
-    /// Dismiss the overlay first, then open the app on the next main turn.
-    /// Synchronous `NSWorkspace.open` must never block hide (cold start 2–5s).
     private func launchAndDismiss(_ record: AppRecord) {
-        // Instant dismiss — no zoom-back when leaving Launchpad to open an app.
-        viewModel.finishClosingFolder()
-        dismiss()
-        DispatchQueue.main.async {
-            _ = AppLauncher().launch(record)
-        }
+        NotificationCenter.default.post(name: .iLaunchOpenApplication, object: record)
     }
 
     private func handleTap(_ item: LaunchpadDisplayItem) {

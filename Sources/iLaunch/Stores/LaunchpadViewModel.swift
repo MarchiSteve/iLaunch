@@ -18,7 +18,13 @@ struct LaunchpadDisplayItem: Identifiable, Equatable {
 @MainActor
 @Observable
 final class LaunchpadViewModel {
-    var searchText = ""
+    var searchText = "" {
+        didSet {
+            if openFolder != nil && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finishClosingFolder()
+            }
+        }
+    }
     var selectedItemID: String?
 
     /// When true, tiles jiggle and can be dragged to reorder.
@@ -797,6 +803,9 @@ final class LaunchpadViewModel {
 
         // Live reorder already positioned the item — persist and finish.
         if preReorderDragID == sourceID {
+            if floatingDragItemID == sourceID, layoutIndex(of: sourceID, on: page) == nil {
+                updateFloatingDrag(at: point)
+            }
             endLiveReorder()
             clearFloatingDrag()
             return

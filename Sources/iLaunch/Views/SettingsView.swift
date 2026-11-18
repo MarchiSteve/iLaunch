@@ -115,6 +115,9 @@ struct SettingsView: View {
         DiagLog.configure(enabled: preferences.diagLoggingEnabled)
         do {
             try preferencesStore.save(preferences)
+            NotificationCenter.default.post(
+                name: .iLaunchFiveFingerGesturesChanged, object: preferences.fiveFingerGesturesEnabled
+            )
             DiagLog.write("preferences saved OK, showSystemApps=\(preferences.showSystemApplications)")
         } catch {
             DiagLog.write("preferences SAVE FAILED: \(error)")
@@ -145,6 +148,7 @@ struct GeneralSettingsView: View {
                 Toggle(Localizer.t("settings.animateFolder"), isOn: $preferences.animateFolder)
                 Toggle(Localizer.t("settings.animateDrag"), isOn: $preferences.animateDrag)
                 Toggle(Localizer.t("settings.animateSearch"), isOn: $preferences.animateSearch)
+                Toggle(Localizer.t("settings.fiveFingerGestures"), isOn: $preferences.fiveFingerGesturesEnabled)
             }
 
             Section(Localizer.t("settings.launch")) {
@@ -173,6 +177,7 @@ struct GeneralSettingsView: View {
         .onChange(of: preferences.animateFolder) { _, _ in onSave() }
         .onChange(of: preferences.animateDrag) { _, _ in onSave() }
         .onChange(of: preferences.animateSearch) { _, _ in onSave() }
+        .onChange(of: preferences.fiveFingerGesturesEnabled) { _, _ in onSave() }
     }
 }
 

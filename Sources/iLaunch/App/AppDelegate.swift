@@ -1,5 +1,9 @@
 import AppKit
 
+extension Notification.Name {
+    static let iLaunchFiveFingerGesturesChanged = Notification.Name("iLaunchFiveFingerGesturesChanged")
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayWindowController()
@@ -7,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: GlobalHotKeyManager?
     private var updateService: UpdateService?
     private var trackpadPinch: TrackpadPinchService?
+    private var fiveFingerGesturesEnabled = false
     private var desktopShownByGesture = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotKeyManager?.start(keyCode: prefs.hotKeyCode, modifiers: prefs.hotKeyModifiers)
         trackpadPinch = TrackpadPinchService { [weak self, overlay] direction in
-            guard let self else { return }
+            guard let self, self.fiveFingerGesturesEnabled else { return }
             switch direction {
             case .inward:
                 if self.desktopShownByGesture && !overlay.isVisible {
@@ -59,10 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             case .outward:
                 if overlay.isVisible {
-                    self.desktopShownByGesture = false
                     overlay.hide()
-                } else if SystemDesktopAction.toggle() {
-                    self.desktopShownByGesture.toggle()
+                } else if !self.desktopShownByGesture && SystemDesktopAction.toggle() {
+                    self.desktopShownByGesture = true
                 }
             }
         }
@@ -80,13 +84,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { self?.desktopShownByGesture = false }
             }
         }
-        trackpadPinch?.start()
+        setFiveFingerGesturesEnabled(prefs.fiveFingerGesturesEnabled)
+        NotificationCenter.default.addObserver(
+            forName: .iLaunchFiveFingerGesturesChanged, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.object as? Bool else { return }
+            MainActor.assumeIsolated { self?.setFiveFingerGesturesEnabled(enabled) }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.trackpadPinch?.stop()
-                self?.trackpadPinch?.start()
+                guard let self, self.fiveFingerGesturesEnabled else { return }
+                self.trackpadPinch?.stop()
+                self.trackpadPinch?.start()
             }
         }
 
@@ -112,7 +123,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func setFiveFingerGesturesEnabled(_ enabled: Bool) {
+        guard enabled != fiveFingerGesturesEnabled else { return }
+        fiveFingerGesturesEnabled = enabled
+        if enabled {
+            trackpadPinch?.start()
+        } else {
+            trackpadPinch?.stop()
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        hotKeyManager?.stop()
         trackpadPinch?.stop()
     }
 

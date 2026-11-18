@@ -125,7 +125,7 @@ final class TrackpadPinchService: @unchecked Sendable {
         }
         let key = UInt(bitPattern: device)
         guard var detector = service.detectors[key] else { return }
-        let matched = detector.update(contacts, timestamp: ProcessInfo.processInfo.systemUptime)
+        let matched = detector.update(contacts)
         service.detectors[key] = detector
         if let direction = matched {
             let action = service.onPinch

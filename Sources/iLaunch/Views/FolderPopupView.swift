@@ -96,11 +96,6 @@ struct FolderPopupView: View {
         .spring(response: 0.40, dampingFraction: 0.86)
     }
 
-    private var closeSpring: Animation {
-        .spring(response: 0.32, dampingFraction: 0.92)
-    }
-
-    private var closeDuration: TimeInterval { 0.38 }
     /// Hard cap so a hung spring cannot leave a blurred shell forever.
     private var openWatchdog: TimeInterval { 0.70 }
     private var closeWatchdog: TimeInterval { 0.55 }
@@ -225,6 +220,7 @@ struct FolderPopupView: View {
             }
         }
         .onAppear { playOpenAnimationIfNeeded() }
+        .onDisappear { closeGeneration &+= 1 }
         .onChange(of: closeEpoch) { _, _ in
             beginDismiss()
         }
@@ -328,11 +324,10 @@ struct FolderPopupView: View {
         let closedItemID = item.id
         panelFrame = .zero
         onPanelFrameChanged?(.zero)
-        withAnimation(closeSpring) {
+        withAnimation(.easeOut(duration: 0.30), completionCriteria: .removed) {
             progress = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + closeDuration) {
-            guard generation == closeGeneration else { return }
+        } completion: {
+            guard generation == closeGeneration, isClosing else { return }
             DiagLog.write("folderClose finished id=\(closedItemID)")
             finishDismiss()
         }
@@ -345,11 +340,16 @@ struct FolderPopupView: View {
     }
 
     private func finishDismiss() {
+        closeGeneration &+= 1
         isClosing = false
-        if let onCloseAnimationFinished {
-            onCloseAnimationFinished()
-        } else {
-            onClose()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if let onCloseAnimationFinished {
+                onCloseAnimationFinished()
+            } else {
+                onClose()
+            }
         }
     }
 
